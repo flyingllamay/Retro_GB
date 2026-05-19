@@ -1,7 +1,9 @@
 ========================================================================
-RETROGB EMULATOR - CODICE SORGENTE COMPLETO
+RETROGB EMULATOR - CODICE SORGENTE COMPLETO (VERSIONE SANITIZZATA)
 ========================================================================
 Questo file contiene l'intero codice sorgente personalizzato dell'applicazione RetroGB.
+Nota: Tutti gli ID AdMob sensibili (App ID e Ad Unit ID) sono stati offuscati
+con asterischi per scopi di sicurezza e conformità alla pubblicazione open-source.
 
 RIFERIMENTI AI CODICI SORGENTI E LICENZE DEGLI EMULATORI:
 ------------------------------------------------------------------------
@@ -20,7 +22,6 @@ wrapper Libretro JNI. Di seguito sono riportati i rimandi e le licenze ufficiali
 3. Libretro (Android JNI Wrapper & RetroArch Core Loader)
    - Licenza: GNU General Public License v3.0 (GPLv3)
    - Repository Sorgente: https://github.com/libretro/RetroArch
-
 
 ========================================================================
 
@@ -53,7 +54,7 @@ wrapper Libretro JNI. Di seguito sono riportati i rimandi e le licenze ufficiali
         <!-- AdMob App ID -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-1801837203896511~8494249487" />
+            android:value="ca-app-pub-****************~**********" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -740,7 +741,7 @@ class AdMobHelper private constructor(private val context: Context) {
     private fun loadLoadingInterstitial() {
         val adRequest = AdRequest.Builder().build()
         // ID reale per interstitial caricamento gioco
-        InterstitialAd.load(context, "ca-app-pub-1801837203896511/2251063319", adRequest,
+        InterstitialAd.load(context, "ca-app-pub-****************/**********", adRequest,
             object : InterstitialAdLoadCallback() {
                 override fun onAdFailedToLoad(adError: LoadAdError) {
                     loadingInterstitialAd = null
@@ -755,7 +756,7 @@ class AdMobHelper private constructor(private val context: Context) {
     private fun loadSavingInterstitial() {
         val adRequest = AdRequest.Builder().build()
         // ID reale per interstitial salvataggio gioco
-        InterstitialAd.load(context, "ca-app-pub-1801837203896511/9753010747", adRequest,
+        InterstitialAd.load(context, "ca-app-pub-****************/**********", adRequest,
             object : InterstitialAdLoadCallback() {
                 override fun onAdFailedToLoad(adError: LoadAdError) {
                     savingInterstitialAd = null
@@ -835,7 +836,7 @@ fun AdBanner(modifier: Modifier = Modifier) {
             AdView(context).apply {
                 setAdSize(AdSize.BANNER)
                 // ID reale per banner (usato per entrambi i banner)
-                adUnitId = "ca-app-pub-1801837203896511/5785845577"
+                adUnitId = "ca-app-pub-****************/**********"
                 loadAd(AdRequest.Builder().build())
             }
         }
@@ -1281,7 +1282,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -1391,7 +1392,6 @@ fun InGameScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val settingsManager = remember { SettingsManager(context) }
     val cheatManager = remember(gameId) { CheatManager(context, gameId) }
     
     var romPaths by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -1470,11 +1470,6 @@ fun InGameScreen(
         retroView?.let { view ->
             while (!view.isShown) delay(100)
             delay(1500)
-            
-            // Apply original screen filter if enabled
-            if (settingsManager.originalScreenEnabled) {
-                view.shader = ShaderConfig.LCD
-            }
             
             if (initialSlotId != null && romPaths != null) {
                 loadFromSlot(initialSlotId, view)
@@ -1752,21 +1747,6 @@ fun InGameScreen(
                         modifier = Modifier.fillMaxSize(),
                         update = { it.requestFocus() }
                     )
-                    
-                    // Original Game Boy green overlay
-                    if (settingsManager.originalScreenEnabled && File(romPath).name.endsWith(".gb", ignoreCase = true)) {
-                        Box(
-                            modifier = Modifier
-                                .matchParentSize()
-                                .drawWithContent {
-                                    drawContent()
-                                    drawRect(
-                                        color = Color(0xFF8B956D),
-                                        blendMode = BlendMode.Multiply
-                                    )
-                                }
-                        )
-                    }
                 }
             } else {
                 // Show a spinner while waiting for the previous core to finish teardown
@@ -1877,7 +1857,7 @@ fun InGameScreen(
         ) {
             Row {
                 IconButton(onClick = { showExitDialog = true }, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 IconButton(onClick = { showCheatMenu = true }, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
@@ -2437,34 +2417,22 @@ fun MainScreen(
     onContinueGame: () -> Unit,
     onSettings: () -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF121212))
     ) {
-        // Subtle Source Code button (GPL compliance)
-        TextButton(
-            onClick = {
-                try {
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse("https://github.com/flyingllamay/Retro_GB")
-                    )
-                    context.startActivity(intent)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            },
+        // Subtle Settings button (rotella di impostazioni in alto a destra)
+        IconButton(
+            onClick = onSettings,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 16.dp, end = 16.dp)
         ) {
-            Text(
-                text = "Source Code",
-                color = Color.White.copy(alpha = 0.25f),
-                style = MaterialTheme.typography.labelSmall
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = Color.White.copy(alpha = 0.5f)
             )
         }
 
@@ -2679,6 +2647,8 @@ fun OnboardingScreen(
 package com.retrogb.ui.settings
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -2696,14 +2666,38 @@ fun SettingsScreen(
     val settingsManager = remember { SettingsManager(context) }
     
     var volume by remember { mutableStateOf(settingsManager.audioVolume) }
-    var useLcdFilter by remember { mutableStateOf(settingsManager.originalScreenEnabled) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    Button(onClick = onBack) { Text("Back") }
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    TextButton(
+                        onClick = {
+                            try {
+                                val intent = android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse("https://github.com/flyingllamay/Retro_GB")
+                                )
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    ) {
+                        Text(
+                            text = "Source Code",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                 }
             )
         }
@@ -2724,16 +2718,6 @@ fun SettingsScreen(
                 valueRange = 0f..1f,
                 modifier = Modifier.fillMaxWidth()
             )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "Enable Original Screen Filter", modifier = Modifier.weight(1f))
-                Switch(checked = useLcdFilter, onCheckedChange = { 
-                    useLcdFilter = it
-                    settingsManager.originalScreenEnabled = it
-                })
-            }
         }
     }
 }
