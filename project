@@ -21,37 +21,6 @@ wrapper Libretro JNI. Di seguito sono riportati i rimandi e le licenze ufficiali
    - Licenza: GNU General Public License v3.0 (GPLv3)
    - Repository Sorgente: https://github.com/libretro/RetroArch
 
-========================================================================
-INDICE DEI FILE INCLUSI IN QUESTO DOCUMENTO:
-========================================================================
-1. app/src/main/AndroidManifest.xml
-2. app/src/main/java/com/retrogb/MainActivity.kt
-3. app/src/main/java/com/retrogb/RetroGbApplication.kt
-4. app/src/main/java/com/retrogb/RetroGbNavigation.kt
-5. app/src/main/java/com/retrogb/data/bios/BiosManager.kt
-6. app/src/main/java/com/retrogb/data/cheats/CheatManager.kt
-7. app/src/main/java/com/retrogb/data/db/GameDao.kt
-8. app/src/main/java/com/retrogb/data/db/GameDatabase.kt
-9. app/src/main/java/com/retrogb/data/db/GameEntity.kt
-10. app/src/main/java/com/retrogb/data/saf/RomScanWorker.kt
-11. app/src/main/java/com/retrogb/data/saf/SafPermissionManager.kt
-12. app/src/main/java/com/retrogb/data/scraper/ScreenScraperRepository.kt
-13. app/src/main/java/com/retrogb/data/settings/SettingsManager.kt
-14. app/src/main/java/com/retrogb/monetization/AdMobHelper.kt
-15. app/src/main/java/com/retrogb/monetization/BillingManager.kt
-16. app/src/main/java/com/retrogb/service/EmulatorService.kt
-17. app/src/main/java/com/retrogb/ui/home/HomeScreen.kt
-18. app/src/main/java/com/retrogb/ui/home/HomeViewModel.kt
-19. app/src/main/java/com/retrogb/ui/home/LoadGameScreen.kt
-20. app/src/main/java/com/retrogb/ui/ingame/InGameScreen.kt
-21. app/src/main/java/com/retrogb/ui/ingame/TouchOverlay.kt
-22. app/src/main/java/com/retrogb/ui/main/MainScreen.kt
-23. app/src/main/java/com/retrogb/ui/onboarding/OnboardingScreen.kt
-24. app/src/main/java/com/retrogb/ui/settings/SettingsScreen.kt
-25. app/src/main/res/values/strings.xml
-26. app/src/main/res/values/themes.xml
-27. app/src/main/res/xml/backup_rules.xml
-28. app/src/main/res/xml/data_extraction_rules.xml
 
 ========================================================================
 
