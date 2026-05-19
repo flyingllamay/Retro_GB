@@ -1,0 +1,2821 @@
+========================================================================
+RETROGB EMULATOR - CODICE SORGENTE COMPLETO
+========================================================================
+Questo file contiene l'intero codice sorgente personalizzato dell'applicazione RetroGB.
+
+RIFERIMENTI AI CODICI SORGENTI E LICENZE DEGLI EMULATORI:
+------------------------------------------------------------------------
+RetroGB è un'applicazione Android con interfaccia utente personalizzata in
+Jetpack Compose, basata su celebri motori di emulazione open-source e sul
+wrapper Libretro JNI. Di seguito sono riportati i rimandi e le licenze ufficiali:
+
+1. mGBA (Core Game Boy Advance)
+   - Licenza: Mozilla Public License 2.0 (MPL-2.0)
+   - Repository Sorgente: https://github.com/mgba-emu/mgba
+
+2. Gearboy (Core Game Boy DMG / Color)
+   - Licenza: GNU General Public License v3.0 (GPLv3)
+   - Repository Sorgente: https://github.com/ignacio-sanchez/gearboy
+
+3. Libretro (Android JNI Wrapper & RetroArch Core Loader)
+   - Licenza: GNU General Public License v3.0 (GPLv3)
+   - Repository Sorgente: https://github.com/libretro/RetroArch
+
+========================================================================
+INDICE DEI FILE INCLUSI IN QUESTO DOCUMENTO:
+========================================================================
+1. app/src/main/AndroidManifest.xml
+2. app/src/main/java/com/retrogb/MainActivity.kt
+3. app/src/main/java/com/retrogb/RetroGbApplication.kt
+4. app/src/main/java/com/retrogb/RetroGbNavigation.kt
+5. app/src/main/java/com/retrogb/data/bios/BiosManager.kt
+6. app/src/main/java/com/retrogb/data/cheats/CheatManager.kt
+7. app/src/main/java/com/retrogb/data/db/GameDao.kt
+8. app/src/main/java/com/retrogb/data/db/GameDatabase.kt
+9. app/src/main/java/com/retrogb/data/db/GameEntity.kt
+10. app/src/main/java/com/retrogb/data/saf/RomScanWorker.kt
+11. app/src/main/java/com/retrogb/data/saf/SafPermissionManager.kt
+12. app/src/main/java/com/retrogb/data/scraper/ScreenScraperRepository.kt
+13. app/src/main/java/com/retrogb/data/settings/SettingsManager.kt
+14. app/src/main/java/com/retrogb/monetization/AdMobHelper.kt
+15. app/src/main/java/com/retrogb/monetization/BillingManager.kt
+16. app/src/main/java/com/retrogb/service/EmulatorService.kt
+17. app/src/main/java/com/retrogb/ui/home/HomeScreen.kt
+18. app/src/main/java/com/retrogb/ui/home/HomeViewModel.kt
+19. app/src/main/java/com/retrogb/ui/home/LoadGameScreen.kt
+20. app/src/main/java/com/retrogb/ui/ingame/InGameScreen.kt
+21. app/src/main/java/com/retrogb/ui/ingame/TouchOverlay.kt
+22. app/src/main/java/com/retrogb/ui/main/MainScreen.kt
+23. app/src/main/java/com/retrogb/ui/onboarding/OnboardingScreen.kt
+24. app/src/main/java/com/retrogb/ui/settings/SettingsScreen.kt
+25. app/src/main/res/values/strings.xml
+26. app/src/main/res/values/themes.xml
+27. app/src/main/res/xml/backup_rules.xml
+28. app/src/main/res/xml/data_extraction_rules.xml
+
+========================================================================
+
+// FILE: app/src/main/AndroidManifest.xml
+// ====================================================================
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".RetroGbApplication"
+        android:allowBackup="true"
+        android:appCategory="game"
+        android:hardwareAccelerated="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/Theme.RetroGB"
+        tools:targetApi="35">
+
+        <!-- AdMob App ID -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-1801837203896511~8494249487" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="sensor"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:theme="@style/Theme.RetroGB">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".service.EmulatorService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false" />
+    </application>
+
+</manifest>
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/MainActivity.kt
+// ====================================================================
+package com.retrogb
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import com.retrogb.data.saf.SafPermissionManager
+
+import androidx.activity.enableEdgeToEdge
+
+class MainActivity : ComponentActivity() {
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+        com.retrogb.monetization.AdMobHelper.initialize(this)
+        val safManager = SafPermissionManager(this)
+
+        val persistedUri = safManager.getPersistedUri()
+        val hasPermission = persistedUri != null && safManager.isPermissionValid(persistedUri)
+
+        setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    RetroGbNavigation(
+                        hasSafPermission = hasPermission,
+                        onRequestPermission = { uri ->
+                            safManager.persistPermission(uri)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/RetroGbApplication.kt
+// ====================================================================
+package com.retrogb
+
+import android.app.Application
+import com.retrogb.data.db.GameDatabase
+
+class RetroGbApplication : Application() {
+    val database by lazy { GameDatabase.getDatabase(this) }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Inizializza il BIOS GBA open source
+        com.retrogb.data.bios.BiosManager(this).setupDefaultBios()
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/RetroGbNavigation.kt
+// ====================================================================
+package com.retrogb
+
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.retrogb.data.bios.BiosManager
+import com.retrogb.data.saf.SafPermissionManager
+import com.retrogb.ui.home.HomeScreen
+import com.retrogb.ui.home.HomeViewModel
+import com.retrogb.ui.home.LoadGameScreen
+import com.retrogb.ui.ingame.InGameScreen
+import com.retrogb.ui.main.MainScreen
+import com.retrogb.ui.onboarding.OnboardingScreen
+import com.retrogb.ui.settings.SettingsScreen
+import kotlinx.coroutines.launch
+
+@Composable
+fun RetroGbNavigation(
+    hasSafPermission: Boolean,
+    onRequestPermission: (Uri) -> Unit
+) {
+    val navController = rememberNavController()
+    val context = LocalContext.current
+    val homeViewModel: HomeViewModel = viewModel()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // Start destination: if we have permission, go to Main Menu, else Onboarding
+    val startDest = if (hasSafPermission) "main_menu" else "onboarding"
+
+    LaunchedEffect(hasSafPermission) {
+        if (hasSafPermission) {
+            val safManager = SafPermissionManager(context)
+            safManager.getPersistedUri()?.let { uri ->
+                homeViewModel.scanRoms(uri)
+            }
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { paddingValues ->
+        NavHost(
+            navController = navController,
+            startDestination = startDest,
+            modifier = Modifier.padding(paddingValues)
+        ) {
+            composable("onboarding") {
+                OnboardingScreen { uri ->
+                    onRequestPermission(uri)
+                    homeViewModel.scanRoms(uri)
+                    navController.navigate("main_menu") {
+                        popUpTo("onboarding") { inclusive = true }
+                    }
+                }
+            }
+
+            composable("main_menu") {
+                MainScreen(
+                    onLoadRom = { navController.navigate("home") },
+                    onContinueGame = { navController.navigate("load_game") },
+                    onSettings = { navController.navigate("settings") }
+                )
+            }
+
+            composable("home") {
+                val games by homeViewModel.games.collectAsState()
+                HomeScreen(
+                    games = games,
+                    onGameClick = { game ->
+                        val act = context as? android.app.Activity
+                        if (act != null) {
+                            com.retrogb.monetization.AdMobHelper.getInstance().showLoadingInterstitial(act) {
+                                navController.navigate("ingame/${Uri.encode(game.uriString)}/${game.crc32}")
+                            }
+                        } else {
+                            navController.navigate("ingame/${Uri.encode(game.uriString)}/${game.crc32}")
+                        }
+                    },
+                    onChangeFolder = {
+                        navController.navigate("onboarding")
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("load_game") {
+                val games by homeViewModel.games.collectAsState()
+                LoadGameScreen(
+                    games = games,
+                    onLoadSlot = { game, slotId ->
+                        val act = context as? android.app.Activity
+                        if (act != null) {
+                            com.retrogb.monetization.AdMobHelper.getInstance().showLoadingInterstitial(act) {
+                                navController.navigate("ingame/${Uri.encode(game.uriString)}/${game.crc32}?slot=$slotId")
+                            }
+                        } else {
+                            navController.navigate("ingame/${Uri.encode(game.uriString)}/${game.crc32}?slot=$slotId")
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("settings") {
+                SettingsScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                route = "ingame/{uri}/{gameId}?slot={slot}",
+                arguments = listOf(
+                    navArgument("uri") { type = NavType.StringType },
+                    navArgument("gameId") { type = NavType.StringType },
+                    navArgument("slot") { 
+                        type = NavType.IntType
+                        defaultValue = -1 
+                    }
+                )
+            ) { backStackEntry ->
+                val uri = backStackEntry.arguments?.getString("uri") ?: ""
+                val gameId = backStackEntry.arguments?.getString("gameId") ?: ""
+                val slotId = backStackEntry.arguments?.getInt("slot")?.takeIf { it != -1 }
+                
+                InGameScreen(
+                    gameUri = uri,
+                    gameId = gameId,
+                    initialSlotId = slotId,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/bios/BiosManager.kt
+// ====================================================================
+package com.retrogb.data.bios
+
+import android.content.Context
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
+
+class BiosManager(private val context: Context) {
+    
+    fun setupDefaultBios() {
+        val biosDir = File(context.filesDir, "bios")
+        if (!biosDir.exists()) {
+            biosDir.mkdirs()
+        }
+        
+        val destFile = File(biosDir, "gba_bios.bin")
+        if (!destFile.exists()) {
+            try {
+                // Copia il BIOS open source (Normmatt) da assets a filesDir
+                context.assets.open("bios/gba_bios_normmatt.bin").use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun importOfficialBios(uri: Uri): Boolean {
+        return try {
+            val biosDir = File(context.filesDir, "bios")
+            if (!biosDir.exists()) biosDir.mkdirs()
+            
+            val destFile = File(biosDir, "gba_bios.bin")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/cheats/CheatManager.kt
+// ====================================================================
+package com.retrogb.data.cheats
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+data class Cheat(
+    val id: String,
+    val name: String,
+    val code: String,
+    var isEnabled: Boolean
+)
+
+class CheatManager(private val context: Context, private val gameId: String) {
+
+    private val cheatsFile: File
+        get() {
+            val dir = File(context.filesDir, "saves/$gameId")
+            dir.mkdirs()
+            return File(dir, "cheats.json")
+        }
+
+    fun loadCheats(): List<Cheat> {
+        if (!cheatsFile.exists()) return emptyList()
+        val cheats = mutableListOf<Cheat>()
+        try {
+            val jsonArray = JSONArray(cheatsFile.readText())
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                cheats.add(
+                    Cheat(
+                        id = obj.getString("id"),
+                        name = obj.getString("name"),
+                        code = obj.getString("code"),
+                        isEnabled = obj.getBoolean("isEnabled")
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return cheats
+    }
+
+    fun saveCheats(cheats: List<Cheat>) {
+        try {
+            val jsonArray = JSONArray()
+            for (cheat in cheats) {
+                val obj = JSONObject()
+                obj.put("id", cheat.id)
+                obj.put("name", cheat.name)
+                obj.put("code", cheat.code)
+                obj.put("isEnabled", cheat.isEnabled)
+                jsonArray.put(obj)
+            }
+            cheatsFile.writeText(jsonArray.toString())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/db/GameDao.kt
+// ====================================================================
+package com.retrogb.data.db
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface GameDao {
+    @Query("SELECT * FROM games ORDER BY name ASC")
+    fun getAllGames(): Flow<List<GameEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(games: List<GameEntity>)
+
+    @Query("DELETE FROM games")
+    suspend fun deleteAll()
+    
+    @Query("UPDATE games SET coverArtPath = :path WHERE uriString = :uri")
+    suspend fun updateCoverArt(uri: String, path: String)
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/db/GameDatabase.kt
+// ====================================================================
+package com.retrogb.data.db
+
+import android.content.Context
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+
+@Database(entities = [GameEntity::class], version = 1, exportSchema = false)
+abstract class GameDatabase : RoomDatabase() {
+    abstract fun gameDao(): GameDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: GameDatabase? = null
+
+        fun getDatabase(context: Context): GameDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    GameDatabase::class.java,
+                    "retrogb_database"
+                ).build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/db/GameEntity.kt
+// ====================================================================
+package com.retrogb.data.db
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+@Entity(tableName = "games")
+data class GameEntity(
+    @PrimaryKey val uriString: String,
+    val name: String,
+    val mimeType: String,
+    val crc32: Long,
+    val coverArtPath: String? = null,
+    val system: String // "GB", "GBC", "GBA"
+)
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/saf/RomScanWorker.kt
+// ====================================================================
+package com.retrogb.data.saf
+
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.retrogb.data.db.GameDatabase
+import com.retrogb.data.db.GameEntity
+import java.util.zip.CRC32
+
+class RomScanWorker(
+    appContext: Context,
+    workerParams: WorkerParameters
+) : CoroutineWorker(appContext, workerParams) {
+
+    override suspend fun doWork(): Result {
+        val uriString = inputData.getString("folder_uri") ?: return Result.failure()
+        val uri = Uri.parse(uriString)
+        
+        val folder = DocumentFile.fromTreeUri(applicationContext, uri)
+            ?: return Result.failure()
+            
+        val games = mutableListOf<GameEntity>()
+        scanFolder(folder, games)
+        
+        val db = GameDatabase.getDatabase(applicationContext)
+        db.gameDao().deleteAll()
+        db.gameDao().insertAll(games)
+        
+        return Result.success()
+    }
+
+    private fun scanFolder(folder: DocumentFile, games: MutableList<GameEntity>) {
+        folder.listFiles().forEach { file ->
+            if (file.isDirectory) {
+                scanFolder(file, games)
+            } else {
+                val name = file.name ?: return@forEach
+                
+                // Automatically discover and copy a valid 16KB GBA BIOS from the ROM folder
+                if (name.equals("gba_bios.bin", ignoreCase = true) || name.equals("bios.bin", ignoreCase = true)) {
+                    val size = file.length()
+                    if (size == 16384L) {
+                        try {
+                            val biosDir = java.io.File(applicationContext.filesDir, "bios").apply { mkdirs() }
+                            val biosFile = java.io.File(biosDir, "gba_bios.bin")
+                            applicationContext.contentResolver.openInputStream(file.uri)?.use { input ->
+                                biosFile.outputStream().use { output -> input.copyTo(output) }
+                            }
+                            android.util.Log.i("RomScanWorker", "Successfully imported valid 16KB GBA BIOS from ROM folder!")
+                        } catch (e: java.lang.Exception) {
+                            android.util.Log.e("RomScanWorker", "Failed to copy GBA BIOS", e)
+                        }
+                    } else {
+                        android.util.Log.w("RomScanWorker", "Found GBA BIOS but size is invalid ($size bytes, expected 16384). Ignoring.")
+                    }
+                    return@forEach
+                }
+
+                val system = when {
+                    name.endsWith(".gb", ignoreCase = true) -> "GB"
+                    name.endsWith(".gbc", ignoreCase = true) -> "GBC"
+                    name.endsWith(".gba", ignoreCase = true) -> "GBA"
+                    else -> null
+                }
+                
+                if (system != null) {
+                    val uri = file.uri
+                    val crc = calculateCrc32(uri)
+                    games.add(GameEntity(
+                        uriString = uri.toString(),
+                        name = name.substringBeforeLast("."),
+                        mimeType = file.type ?: "application/octet-stream",
+                        crc32 = crc,
+                        system = system
+                    ))
+                }
+            }
+        }
+    }
+
+    private fun calculateCrc32(uri: Uri): Long {
+        return try {
+            val crc = CRC32()
+            applicationContext.contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(8192)
+                var read: Int
+                while (input.read(buffer).also { read = it } != -1) {
+                    crc.update(buffer, 0, read)
+                }
+            }
+            crc.value
+        } catch (e: Exception) {
+            0L
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/saf/SafPermissionManager.kt
+// ====================================================================
+package com.retrogb.data.saf
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+
+class SafPermissionManager(private val context: Context) {
+    
+    fun persistPermission(uri: Uri) {
+        context.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        )
+        val prefs = context.getSharedPreferences("saf_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("rom_folder_uri", uri.toString()).apply()
+    }
+    
+    fun getPersistedUri(): Uri? {
+        val prefs = context.getSharedPreferences("saf_prefs", Context.MODE_PRIVATE)
+        val uriString = prefs.getString("rom_folder_uri", null) ?: return null
+        return Uri.parse(uriString)
+    }
+
+    fun isPermissionValid(uri: Uri): Boolean {
+        return context.contentResolver.persistedUriPermissions
+            .any { it.uri == uri && it.isReadPermission }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/scraper/ScreenScraperRepository.kt
+// ====================================================================
+package com.retrogb.data.scraper
+
+import kotlinx.coroutines.delay
+import java.util.concurrent.atomic.AtomicLong
+
+class ScreenScraperRepository {
+    // Rate Limiting: 1 request per second
+    private val lastRequestTime = AtomicLong(0)
+    
+    suspend fun getCoverArtUrl(crc32: Long): String? {
+        enforceRateLimit()
+        
+        // Simula la chiamata API a ScreenScraper passando il crc32
+        // Esempio: "https://screenscraper.fr/api2/jeuRecherche.php?crc=$crc32&devid=YOUR_ID..."
+        
+        // In un'app reale qui si farebbe una richiesta HTTP (es. Retrofit/Ktor)
+        // e si parserrebbe l'XML/JSON restituito.
+        return null // Placeholder
+    }
+    
+    private suspend fun enforceRateLimit() {
+        val now = System.currentTimeMillis()
+        val last = lastRequestTime.get()
+        val elapsed = now - last
+        
+        if (elapsed < 1000) {
+            delay(1000 - elapsed)
+        }
+        lastRequestTime.set(System.currentTimeMillis())
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/data/settings/SettingsManager.kt
+// ====================================================================
+package com.retrogb.data.settings
+
+import android.content.Context
+import android.content.SharedPreferences
+
+class SettingsManager(context: Context) {
+    private val prefs: SharedPreferences = context.getSharedPreferences("retrogb_settings", Context.MODE_PRIVATE)
+
+    var turboButtonEnabled: Boolean
+        get() = prefs.getBoolean("turbo_button_enabled", false)
+        set(value) = prefs.edit().putBoolean("turbo_button_enabled", value).apply()
+
+    var originalScreenEnabled: Boolean
+        get() = prefs.getBoolean("original_screen_enabled", false)
+        set(value) = prefs.edit().putBoolean("original_screen_enabled", value).apply()
+        
+    var audioVolume: Float
+        get() = prefs.getFloat("audio_volume", 1f)
+        set(value) = prefs.edit().putFloat("audio_volume", value).apply()
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/monetization/AdMobHelper.kt
+// ====================================================================
+package com.retrogb.monetization
+
+import android.app.Activity
+import android.content.Context
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.viewinterop.AndroidView
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
+import com.google.android.gms.ads.interstitial.InterstitialAd
+import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
+import com.google.android.gms.ads.LoadAdError
+
+class AdMobHelper private constructor(private val context: Context) {
+    
+    private var loadingInterstitialAd: InterstitialAd? = null
+    private var savingInterstitialAd: InterstitialAd? = null
+
+    init {
+        MobileAds.initialize(context) {}
+        loadLoadingInterstitial()
+        loadSavingInterstitial()
+    }
+
+    private fun loadLoadingInterstitial() {
+        val adRequest = AdRequest.Builder().build()
+        // ID reale per interstitial caricamento gioco
+        InterstitialAd.load(context, "ca-app-pub-1801837203896511/2251063319", adRequest,
+            object : InterstitialAdLoadCallback() {
+                override fun onAdFailedToLoad(adError: LoadAdError) {
+                    loadingInterstitialAd = null
+                }
+                override fun onAdLoaded(ad: InterstitialAd) {
+                    loadingInterstitialAd = ad
+                }
+            }
+        )
+    }
+
+    private fun loadSavingInterstitial() {
+        val adRequest = AdRequest.Builder().build()
+        // ID reale per interstitial salvataggio gioco
+        InterstitialAd.load(context, "ca-app-pub-1801837203896511/9753010747", adRequest,
+            object : InterstitialAdLoadCallback() {
+                override fun onAdFailedToLoad(adError: LoadAdError) {
+                    savingInterstitialAd = null
+                }
+                override fun onAdLoaded(ad: InterstitialAd) {
+                    savingInterstitialAd = ad
+                }
+            }
+        )
+    }
+
+    fun showLoadingInterstitial(activity: Activity, onAdDismissed: () -> Unit) {
+        val ad = loadingInterstitialAd
+        if (ad != null) {
+            ad.fullScreenContentCallback = object : com.google.android.gms.ads.FullScreenContentCallback() {
+                override fun onAdDismissedFullScreenContent() {
+                    loadingInterstitialAd = null
+                    loadLoadingInterstitial() // Ricarica
+                    onAdDismissed()
+                }
+                override fun onAdFailedToShowFullScreenContent(adError: com.google.android.gms.ads.AdError) {
+                    loadingInterstitialAd = null
+                    loadLoadingInterstitial()
+                    onAdDismissed()
+                }
+            }
+            ad.show(activity)
+        } else {
+            loadLoadingInterstitial()
+            onAdDismissed()
+        }
+    }
+
+    fun showSavingInterstitial(activity: Activity, onAdDismissed: () -> Unit) {
+        val ad = savingInterstitialAd
+        if (ad != null) {
+            ad.fullScreenContentCallback = object : com.google.android.gms.ads.FullScreenContentCallback() {
+                override fun onAdDismissedFullScreenContent() {
+                    savingInterstitialAd = null
+                    loadSavingInterstitial() // Ricarica
+                    onAdDismissed()
+                }
+                override fun onAdFailedToShowFullScreenContent(adError: com.google.android.gms.ads.AdError) {
+                    savingInterstitialAd = null
+                    loadSavingInterstitial()
+                    onAdDismissed()
+                }
+            }
+            ad.show(activity)
+        } else {
+            loadSavingInterstitial()
+            onAdDismissed()
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var instance: AdMobHelper? = null
+
+        fun initialize(context: Context): AdMobHelper {
+            return instance ?: synchronized(this) {
+                instance ?: AdMobHelper(context.applicationContext).also { instance = it }
+            }
+        }
+
+        fun getInstance(): AdMobHelper {
+            return instance ?: throw IllegalStateException("AdMobHelper not initialized. Call initialize(context) first.")
+        }
+    }
+}
+
+@Composable
+fun AdBanner(modifier: Modifier = Modifier) {
+    AndroidView(
+        modifier = modifier.fillMaxWidth(),
+        factory = { context ->
+            AdView(context).apply {
+                setAdSize(AdSize.BANNER)
+                // ID reale per banner (usato per entrambi i banner)
+                adUnitId = "ca-app-pub-1801837203896511/5785845577"
+                loadAd(AdRequest.Builder().build())
+            }
+        }
+    )
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/monetization/BillingManager.kt
+// ====================================================================
+package com.retrogb.monetization
+
+import android.content.Context
+import com.android.billingclient.api.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+class BillingManager(private val context: Context) {
+    
+    private val _isAdFree = MutableStateFlow(false)
+    val isAdFree: StateFlow<Boolean> = _isAdFree
+
+    private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
+        if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
+            for (purchase in purchases) {
+                handlePurchase(purchase)
+            }
+        }
+    }
+
+    private var billingClient = BillingClient.newBuilder(context)
+        .setListener(purchasesUpdatedListener)
+        .enablePendingPurchases()
+        .build()
+
+    init {
+        billingClient.startConnection(object : BillingClientStateListener {
+            override fun onBillingSetupFinished(billingResult: BillingResult) {
+                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
+                    queryPurchases()
+                }
+            }
+            override fun onBillingServiceDisconnected() {
+                // Riprova la connessione
+            }
+        })
+    }
+
+    private fun queryPurchases() {
+        billingClient.queryPurchasesAsync(
+            QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.INAPP).build()
+        ) { result, purchases ->
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                val hasPurchased = purchases.any { it.products.contains("remove_ads") }
+                _isAdFree.value = hasPurchased
+            }
+        }
+    }
+
+    private fun handlePurchase(purchase: Purchase) {
+        if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
+            if (!purchase.isAcknowledged) {
+                val acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder()
+                    .setPurchaseToken(purchase.purchaseToken)
+                    .build()
+                billingClient.acknowledgePurchase(acknowledgePurchaseParams) { result ->
+                    if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                        _isAdFree.value = true
+                    }
+                }
+            } else {
+                _isAdFree.value = true
+            }
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/service/EmulatorService.kt
+// ====================================================================
+package com.retrogb.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+
+class EmulatorService : Service() {
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val channelId = "emulator_service"
+        val channelName = "Emulator Performance Mode"
+        
+        val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+
+        val notification: Notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("RetroGB Active")
+            .setContentText("Performance mode enabled")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setOngoing(true)
+            .build()
+
+        startForeground(1, notification)
+        return START_STICKY
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/home/HomeScreen.kt
+// ====================================================================
+package com.retrogb.ui.home
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import com.retrogb.data.db.GameEntity
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+    games: List<GameEntity>,
+    onGameClick: (GameEntity) -> Unit,
+    onChangeFolder: () -> Unit,
+    onBack: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Load ROM", color = Color.White) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(androidx.compose.material.icons.Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF121212))
+            )
+        },
+        floatingActionButton = {
+            Box(modifier = Modifier.padding(bottom = 60.dp)) {
+                ExtendedFloatingActionButton(
+                    onClick = onChangeFolder,
+                    containerColor = Color(0xFF2196F3),
+                    contentColor = Color.White,
+                    icon = { Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Change Folder") },
+                    text = { Text("Change Folder") }
+                )
+            }
+        },
+        containerColor = Color(0xFF121212)
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            Box(modifier = Modifier.weight(1f)) {
+                if (games.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No games found.\nPlease select a ROM folder.",
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.Gray
+                        )
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        contentPadding = PaddingValues(8.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(games) { game ->
+                            GameCard(game = game, onClick = { onGameClick(game) })
+                        }
+                    }
+                }
+            }
+            com.retrogb.monetization.AdBanner()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GameCard(game: GameEntity, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .padding(4.dp)
+            .aspectRatio(0.7f)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Qui andrà Coil AsyncImage per il box art
+            Text(
+                text = game.name,
+                modifier = Modifier.align(Alignment.Center).padding(8.dp),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodySmall
+            )
+            
+            // Badge sistema
+            val badgeColor = when(game.system) {
+                "GB" -> Color.Gray
+                "GBC" -> Color.Cyan
+                "GBA" -> Color.Magenta
+                else -> Color.LightGray
+            }
+            Text(
+                text = game.system,
+                color = badgeColor,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+            )
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/home/HomeViewModel.kt
+// ====================================================================
+package com.retrogb.ui.home
+
+import android.app.Application
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.work.Data
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.retrogb.data.db.GameDatabase
+import com.retrogb.data.db.GameEntity
+import com.retrogb.data.saf.RomScanWorker
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
+
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val db = GameDatabase.getDatabase(application)
+
+    // Flow di tutti i giochi da Room, osservato dalla UI
+    val games: StateFlow<List<GameEntity>> = db.gameDao()
+        .getAllGames()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+    fun scanRoms(folderUri: Uri) {
+        val inputData = Data.Builder()
+            .putString("folder_uri", folderUri.toString())
+            .build()
+
+        val request = OneTimeWorkRequestBuilder<RomScanWorker>()
+            .setInputData(inputData)
+            .build()
+
+        WorkManager.getInstance(getApplication()).enqueue(request)
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/home/LoadGameScreen.kt
+// ====================================================================
+package com.retrogb.ui.home
+
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.retrogb.data.db.GameEntity
+import com.retrogb.ui.ingame.SaveSlot
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LoadGameScreen(
+    games: List<GameEntity>,
+    onLoadSlot: (GameEntity, Int) -> Unit,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val savesDir = File(context.filesDir, "saves")
+    
+    val allSlots = remember(games) {
+        val list = mutableListOf<Pair<GameEntity, SaveSlot>>()
+        if (savesDir.exists()) {
+            savesDir.listFiles()?.forEach { gameFolder ->
+                if (gameFolder.isDirectory) {
+                    val folderCrc = gameFolder.name
+                    val gameEntity = games.find { it.crc32.toString() == folderCrc }
+                    if (gameEntity != null) {
+                        (0..5).forEach { id ->
+                            val stateFile = File(gameFolder, "slot_$id.state")
+                            val imgFile = File(gameFolder, "slot_$id.png")
+                            if (stateFile.exists()) {
+                                list.add(gameEntity to SaveSlot(id, stateFile.lastModified(), imgFile.absolutePath, stateFile.absolutePath))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        list.sortedByDescending { it.second.dateMs }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Continue Game", color = Color.White) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF121212))
+            )
+        },
+        containerColor = Color(0xFF121212)
+    ) { padding ->
+        if (allSlots.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("No saved games found.", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+                items(allSlots) { (game, slot) ->
+                    SaveSlotItem(game, slot) {
+                        onLoadSlot(game, slot.id)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SaveSlotItem(game: GameEntity, slot: SaveSlot, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
+    ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Screenshot
+            Box(modifier = Modifier.size(120.dp, 90.dp).background(Color.Black)) {
+                if (File(slot.imagePath).exists()) {
+                    val bmp = BitmapFactory.decodeFile(slot.imagePath)
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.width(16.dp))
+            
+            Column {
+                Text(text = game.name, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                val slotName = if (slot.id == 0) "Auto-Save" else "Slot ${slot.id}"
+                Text(text = slotName, color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodyMedium)
+                val format = SimpleDateFormat("MM/dd/yyyy HH:mm", Locale.getDefault())
+                Text(text = format.format(Date(slot.dateMs)), color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/ingame/InGameScreen.kt
+// ====================================================================
+package com.retrogb.ui.ingame
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.FileObserver
+import android.util.Log
+import android.view.KeyEvent
+import android.view.PixelCopy
+import android.view.View
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.retrogb.data.settings.SettingsManager
+import com.retrogb.data.cheats.Cheat
+import com.retrogb.data.cheats.CheatManager
+import com.swordfish.libretrodroid.GLRetroView
+import com.swordfish.libretrodroid.GLRetroViewData
+import com.swordfish.libretrodroid.ShaderConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.DelicateCoroutinesApi
+
+private const val TAG = "RetroGB"
+
+object RetroCoreManager {
+    // Holds a Deferred that completes when the previous core is fully destroyed.
+    // New games wait on this before creating a GLRetroView.
+    @Volatile
+    var previousCoreDestroyed: kotlinx.coroutines.CompletableDeferred<Unit> = kotlinx.coroutines.CompletableDeferred<Unit>().also { it.complete(Unit) }
+}
+
+private suspend fun prepareRom(context: Context, gameUri: String, gameId: String): Pair<String, String>? {
+    return withContext(Dispatchers.IO) {
+        try {
+            val cursor = context.contentResolver.query(
+                Uri.parse(gameUri),
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                null, null, null
+            )
+            val filename = cursor?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            } ?: "rom.bin"
+
+            val decodedUri = Uri.decode(gameUri)
+            val isGba = filename.endsWith(".gba", ignoreCase = true) ||
+                        decodedUri.contains(".gba", ignoreCase = true) ||
+                        gameUri.contains(".gba", ignoreCase = true) ||
+                        gameUri.contains("%2Egba", ignoreCase = true)
+            
+            val ext = if (isGba) "gba" else "gb"
+            
+            // Sanitize gameId for file name
+            val cleanId = gameId.replace("[^a-zA-Z0-9]".toRegex(), "_")
+            val tempFile = File(context.cacheDir, "${cleanId}.${ext}")
+            
+            // Clean up other cached ROMs to save space
+            try {
+                context.cacheDir.listFiles()?.forEach { file ->
+                    if (file.name != tempFile.name && (file.name.endsWith(".gba") || file.name.endsWith(".gb") || file.name.contains("temp_rom"))) {
+                        file.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning cache", e)
+            }
+
+            context.contentResolver.openInputStream(Uri.parse(gameUri))?.use { input ->
+                tempFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            
+            val coreName = if (isGba) "libmgba_libretro_android.so" else "gearboy_libretro_android.so"
+            val corePath = File(context.applicationInfo.nativeLibraryDir, coreName).absolutePath
+            
+            Pair(tempFile.absolutePath, corePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error preparing ROM", e)
+            null
+        }
+    }
+}
+
+data class SaveSlot(val id: Int, val dateMs: Long, val imagePath: String, val statePath: String)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InGameScreen(
+    gameUri: String,
+    gameId: String,
+    initialSlotId: Int? = null,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+    val settingsManager = remember { SettingsManager(context) }
+    val cheatManager = remember(gameId) { CheatManager(context, gameId) }
+    
+    var romPaths by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var retroView by remember { mutableStateOf<GLRetroView?>(null) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showCheatMenu by remember { mutableStateOf(false) }
+    var showExitDialog by remember { mutableStateOf(false) }
+    var isTurboActive by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    
+    var cheatsList by remember { mutableStateOf(cheatManager.loadCheats()) }
+    
+    fun applyCheats(view: GLRetroView) {
+        cheatsList.forEachIndexed { index, cheat ->
+            view.setCheat(index, cheat.isEnabled, cheat.code, false)
+        }
+    }
+
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    // Functions defined at the top to avoid unresolved references
+    fun getSavesDir(): File {
+        val dir = File(context.filesDir, "saves/$gameId")
+        dir.mkdirs()
+        return dir
+    }
+
+    fun getSlots(): List<SaveSlot> {
+        val dir = getSavesDir()
+        return (1..5).map { id ->
+            val stateFile = File(dir, "slot_$id.state")
+            val imgFile = File(dir, "slot_$id.png")
+            if (stateFile.exists()) {
+                SaveSlot(id, stateFile.lastModified(), imgFile.absolutePath, stateFile.absolutePath)
+            } else {
+                SaveSlot(id, 0L, "", "")
+            }
+        }
+    }
+
+    fun loadFromSlot(slotId: Int, view: GLRetroView) {
+        try {
+            val dir = getSavesDir()
+            val stateFile = File(dir, "slot_$slotId.state")
+            if (stateFile.exists()) {
+                val state = stateFile.readBytes()
+                view.unserializeState(state, true)
+                scope.launch { snackbarHostState.showSnackbar("State loaded from Slot $slotId") }
+                showMenu = false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Load failed", e)
+        }
+    }
+
+    // Hide status bar and navigation bar for immersive experience
+    val activity = context as? Activity
+    LaunchedEffect(Unit) {
+        activity?.window?.let { window ->
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    LaunchedEffect(gameUri, gameId) {
+        romPaths = prepareRom(context, gameUri, gameId)
+    }
+
+    LaunchedEffect(isTurboActive) {
+        retroView?.frameSpeed = if (isTurboActive) 8 else 1
+    }
+
+    LaunchedEffect(retroView) {
+        retroView?.let { view ->
+            while (!view.isShown) delay(100)
+            delay(1500)
+            
+            // Apply original screen filter if enabled
+            if (settingsManager.originalScreenEnabled) {
+                view.shader = ShaderConfig.LCD
+            }
+            
+            if (initialSlotId != null && romPaths != null) {
+                loadFromSlot(initialSlotId, view)
+            } else {
+                val startKey = KeyEvent.KEYCODE_BUTTON_START
+                view.sendKeyEvent(KeyEvent.ACTION_DOWN, startKey, 0)
+                delay(100)
+                view.sendKeyEvent(KeyEvent.ACTION_UP, startKey, 0)
+            }
+            
+            // Re-apply cheats
+            applyCheats(view)
+        }
+    }
+
+    // Auto-save: call this BEFORE onBack() while the GL view is still alive and valid
+    fun performAutoSave() {
+        retroView?.let { view ->
+            try {
+                val state = view.serializeState()
+                val dir = getSavesDir()
+                File(dir, "slot_0.state").writeBytes(state)
+                Log.d(TAG, "Auto-saved to slot 0")
+            } catch (e: Exception) {
+                Log.e(TAG, "Auto-save failed", e)
+            }
+        }
+    }
+
+    // JNI teardown only — keyed on lifecycleOwner so it fires exactly once when the screen leaves
+    DisposableEffect(lifecycleOwner) {
+        onDispose {
+            val view = retroView ?: return@onDispose
+            // Signal to the next InGameScreen that it must wait for us
+            val destroyedSignal = kotlinx.coroutines.CompletableDeferred<Unit>()
+            RetroCoreManager.previousCoreDestroyed = destroyedSignal
+            // Detach lifecycle observer immediately
+            lifecycleOwner.lifecycle.removeObserver(view)
+            // Destroy the native core fully off the main thread
+            @OptIn(DelicateCoroutinesApi::class)
+            GlobalScope.launch(Dispatchers.IO) {
+                try {
+                    view.onDestroy()
+                    Log.d(TAG, "GLRetroView JNI destroyed in background")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error destroying GLRetroView JNI in background", e)
+                } finally {
+                    destroyedSignal.complete(Unit)
+                }
+            }
+        }
+    }
+    
+    BackHandler {
+        performAutoSave()
+        onBack()
+    }
+
+    // Monitor saves directory for both in-game saves (.srm) and slot saves (.state)
+    DisposableEffect(gameId) {
+        val savesDir = File(context.filesDir, "saves")
+        val gameSavesDir = File(savesDir, gameId)
+        savesDir.mkdirs()
+        gameSavesDir.mkdirs()
+
+        var lastTriggerTime = 0L
+        val mainHandler = Handler(Looper.getMainLooper())
+
+        val triggerAd = {
+            val now = System.currentTimeMillis()
+            if (now - lastTriggerTime > 8000) { // 8 seconds debounce
+                lastTriggerTime = now
+                mainHandler.post {
+                    val act = context as? Activity
+                    if (act != null) {
+                        try {
+                            com.retrogb.monetization.AdMobHelper.getInstance().showSavingInterstitial(act) {}
+                        } catch (e: Exception) {
+                            Log.e("SaveObserver", "Failed to show interstitial ad", e)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Observer for in-game saves in the main saves directory
+        val mainObserver = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            object : FileObserver(savesDir, CLOSE_WRITE or CREATE or MODIFY) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path != null && (path.endsWith(".srm") || path.endsWith(".sav") || path.endsWith(".flash"))) {
+                        triggerAd()
+                    }
+                }
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            object : FileObserver(savesDir.absolutePath, CLOSE_WRITE or CREATE or MODIFY) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path != null && (path.endsWith(".srm") || path.endsWith(".sav") || path.endsWith(".flash"))) {
+                        triggerAd()
+                    }
+                }
+            }
+        }
+
+        // Observer for slot-saves in the game-specific directory
+        val slotObserver = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            object : FileObserver(gameSavesDir, CLOSE_WRITE or CREATE or MODIFY) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path != null && path.endsWith(".state") && !path.contains("slot_0")) { // Ignore auto-save slot_0
+                        triggerAd()
+                    }
+                }
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            object : FileObserver(gameSavesDir.absolutePath, CLOSE_WRITE or CREATE or MODIFY) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path != null && path.endsWith(".state") && !path.contains("slot_0")) { // Ignore auto-save slot_0
+                        triggerAd()
+                    }
+                }
+            }
+        }
+
+        mainObserver.startWatching()
+        slotObserver.startWatching()
+
+        onDispose {
+            mainObserver.stopWatching()
+            slotObserver.stopWatching()
+        }
+    }
+
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitDialog = false },
+            title = { Text("Exit Game") },
+            text = { Text("Your progress has been auto-saved.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitDialog = false
+                    performAutoSave()
+                    onBack()
+                }) { Text("Yes, exit") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitDialog = false }) { Text("No") }
+            }
+        )
+    }
+
+    var slots by remember { mutableStateOf<List<SaveSlot>>(emptyList()) }
+
+    LaunchedEffect(showMenu) {
+        if (showMenu && romPaths != null) {
+            slots = getSlots()
+        }
+    }
+
+    fun saveToSlot(slotId: Int, view: GLRetroView) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val state = view.serializeState()
+                val dir = getSavesDir()
+                val stateFile = File(dir, "slot_$slotId.state")
+                stateFile.writeBytes(state)
+                
+                // Screenshot via PixelCopy (must be on UI thread or with handler)
+                withContext(Dispatchers.Main) {
+                    val act = context as? Activity
+                    if (act != null && act.window != null) {
+                        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+                        val location = IntArray(2)
+                        view.getLocationInWindow(location)
+                        val surfaceView = view as? android.view.SurfaceView
+                        if (surfaceView != null) {
+                            PixelCopy.request(
+                                surfaceView,
+                                null, // Full surface
+                                bitmap,
+                                { copyResult ->
+                                    if (copyResult == PixelCopy.SUCCESS) {
+                                        scope.launch(Dispatchers.IO) {
+                                            val imgFile = File(dir, "slot_$slotId.png")
+                                            FileOutputStream(imgFile).use { out ->
+                                                bitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
+                                            }
+                                            slots = getSlots() // Refresh
+                                            snackbarHostState.showSnackbar("State saved in Slot $slotId")
+                                        }
+                                    } else {
+                                        Log.e(TAG, "PixelCopy failed with result: $copyResult")
+                                    }
+                                },
+                                Handler(Looper.getMainLooper())
+                            )
+                        } else {
+                            // Fallback to window request if not a SurfaceView
+                            PixelCopy.request(
+                                act.window,
+                                android.graphics.Rect(location[0], location[1], location[0] + view.width, location[1] + view.height),
+                                bitmap,
+                                { copyResult ->
+                                    if (copyResult == PixelCopy.SUCCESS) {
+                                        scope.launch(Dispatchers.IO) {
+                                            val imgFile = File(dir, "slot_$slotId.png")
+                                            FileOutputStream(imgFile).use { out ->
+                                                bitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
+                                            }
+                                            slots = getSlots() // Refresh
+                                            snackbarHostState.showSnackbar("State saved in Slot $slotId")
+                                        }
+                                    }
+                                },
+                                Handler(Looper.getMainLooper())
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Save failed", e)
+            }
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        if (romPaths != null) {
+            val (romPath, corePath) = romPaths!!
+
+            // UNIFIED LAYOUT TO PREVENT CRASH
+            val portraitPaddingBottom = configuration.screenHeightDp.dp * 0.48f
+            val isGba = romPaths?.second?.contains("mgba") == true || romPaths?.second?.contains("vba") == true
+            
+            val viewModifier = if (isLandscape) {
+                if (isGba) {
+                    // For GBA, add more padding to shrink screen by ~5% and avoid B button
+                    Modifier.fillMaxSize().padding(horizontal = 160.dp, vertical = 15.dp)
+                } else {
+                    Modifier.fillMaxSize().padding(horizontal = 140.dp)
+                }
+            } else {
+                // In portrait, add some top padding
+                Modifier.fillMaxSize().padding(top = 40.dp, bottom = portraitPaddingBottom)
+            }
+
+            // Wait for the previous core to finish teardown before creating a new one.
+            // withTimeoutOrNull(5000) ensures the spinner never spins forever.
+            var isReadyToLoad by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                withContext(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                        RetroCoreManager.previousCoreDestroyed.await()
+                    } ?: Log.w(TAG, "Timed out waiting for previous core teardown — proceeding anyway")
+                }
+                isReadyToLoad = true
+            }
+
+            if (isReadyToLoad) {
+                // Game View Box
+                Box(modifier = viewModifier) {
+                    AndroidView(
+                        factory = { ctx ->
+                            val data = GLRetroViewData(ctx).apply {
+                                coreFilePath = corePath; gameFilePath = romPath
+                                systemDirectory = File(ctx.filesDir, "bios").absolutePath
+                                savesDirectory = File(ctx.filesDir, "saves").apply { mkdirs() }.absolutePath
+                            }
+                            GLRetroView(ctx, data).apply {
+                                lifecycleOwner.lifecycle.addObserver(this)
+                                post { postDelayed({ setControllerType(0, 1) }, 500); requestFocus() }
+                                retroView = this
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        update = { it.requestFocus() }
+                    )
+                    
+                    // Original Game Boy green overlay
+                    if (settingsManager.originalScreenEnabled && File(romPath).name.endsWith(".gb", ignoreCase = true)) {
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .drawWithContent {
+                                    drawContent()
+                                    drawRect(
+                                        color = Color(0xFF8B956D),
+                                        blendMode = BlendMode.Multiply
+                                    )
+                                }
+                        )
+                    }
+                }
+            } else {
+                // Show a spinner while waiting for the previous core to finish teardown
+                Box(modifier = viewModifier, contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF4CAF50))
+                }
+            }
+
+            // Controls Overlay
+            val overlayModifier = if (isLandscape) {
+                Modifier.fillMaxSize().zIndex(1f)
+            } else {
+                Modifier.fillMaxWidth().height(portraitPaddingBottom).align(Alignment.BottomCenter).zIndex(1f)
+            }
+            
+            TouchOverlay(
+                modifier = overlayModifier,
+                isLandscape = isLandscape,
+                retroView = retroView ?: return@Box,
+                onButtonEvent = { id, pressed ->
+                    if (id == 12) {
+                        isTurboActive = pressed
+                    } else {
+                        val keyCode = getAndroidKeyCode(id)
+                        if (keyCode != -1) retroView?.sendKeyEvent(if (pressed) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, keyCode, 0)
+                    }
+                }
+            )
+            
+            // Menu Overlay (Slot Manager)
+            if (showMenu) {
+                ModalBottomSheet(
+                    onDismissRequest = { showMenu = false },
+                    containerColor = Color(0xFF222222)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+                        Text("Save Management", color = Color.White, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 16.dp))
+                        
+                        LazyColumn {
+                            items(slots) { slot ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF333333))
+                                ) {
+                                    Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        // Image
+                                        Box(modifier = Modifier.size(100.dp, 75.dp).background(Color.Black)) {
+                                            if (slot.imagePath.isNotEmpty() && File(slot.imagePath).exists()) {
+                                                val bmp = android.graphics.BitmapFactory.decodeFile(slot.imagePath)
+                                                if (bmp != null) {
+                                                    Image(bitmap = bmp.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                                }
+                                            } else {
+                                                Text("Empty", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
+                                            }
+                                        }
+                                        
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        
+                                        // Info
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Slot ${slot.id}", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                                            if (slot.dateMs > 0) {
+                                                val format = SimpleDateFormat("MM/dd/yyyy HH:mm", Locale.getDefault())
+                                                Text(format.format(Date(slot.dateMs)), color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                                            } else {
+                                                Text("No save data", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
+                                        
+                                        // Buttons
+                                        Column {
+                                            Button(
+                                                onClick = { retroView?.let { saveToSlot(slot.id, it) } },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                                                modifier = Modifier.height(35.dp)
+                                            ) { Text("Save", style = MaterialTheme.typography.labelSmall) }
+                                            
+                                            if (slot.dateMs > 0) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Button(
+                                                    onClick = { retroView?.let { loadFromSlot(slot.id, it) } },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+                                                    modifier = Modifier.height(35.dp)
+                                                ) { Text("Load", style = MaterialTheme.typography.labelSmall) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(32.dp))
+                    }
+                }
+            }
+        } else {
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF4CAF50))
+        }
+
+        // Toolbar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp, start = 16.dp, end = 16.dp)
+                .zIndex(5f),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row {
+                IconButton(onClick = { showExitDialog = true }, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(onClick = { showCheatMenu = true }, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
+                    Icon(Icons.Default.Star, contentDescription = "Cheats", tint = Color.White)
+                }
+            }
+            
+            // Redundant toolbar fast-forward toggle button removed as we now have hold-to-turbo on virtual overlay.
+
+            IconButton(onClick = { showMenu = true }, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
+                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
+            }
+        }
+        
+        SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter).zIndex(5f))
+        
+        // Cheats Bottom Sheet
+        if (showCheatMenu) {
+            var showAddDialog by remember { mutableStateOf(false) }
+            var cheatToEdit by remember { mutableStateOf<Cheat?>(null) }
+            
+            ModalBottomSheet(
+                onDismissRequest = { showCheatMenu = false },
+                containerColor = Color(0xFF222222)
+            ) {
+                Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Cheats", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                        IconButton(onClick = { showAddDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Add Cheat", tint = Color(0xFF4CAF50))
+                        }
+                    }
+                    
+                    if (cheatsList.isEmpty()) {
+                        Text("No cheats added.", color = Color.Gray)
+                    } else {
+                        LazyColumn {
+                            items(cheatsList) { cheat ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { cheatToEdit = cheat }
+                                    ) {
+                                        Text(cheat.name, color = Color.White)
+                                        Text(cheat.code, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Switch(
+                                        checked = cheat.isEnabled,
+                                        onCheckedChange = { checked ->
+                                            val updated = cheatsList.map { if (it.id == cheat.id) it.copy(isEnabled = checked) else it }
+                                            cheatsList = updated
+                                            cheatManager.saveCheats(updated)
+                                            retroView?.let { applyCheats(it) }
+                                        }
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            val updated = cheatsList.filter { it.id != cheat.id }
+                                            cheatsList = updated
+                                            cheatManager.saveCheats(updated)
+                                            retroView?.let { applyCheats(it) }
+                                        }
+                                    ) {
+                                        Text("X", color = Color.Red, style = MaterialTheme.typography.titleMedium)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(32.dp))
+                }
+            }
+            
+            if (showAddDialog) {
+                var newName by remember { mutableStateOf("") }
+                var newCode by remember { mutableStateOf("") }
+                
+                AlertDialog(
+                    onDismissRequest = { showAddDialog = false },
+                    title = { Text("Add Cheat") },
+                    text = {
+                        Column {
+                            OutlinedTextField(
+                                value = newName,
+                                onValueChange = { newName = it },
+                                label = { Text("Name") }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = newCode,
+                                onValueChange = { newCode = it },
+                                label = { Text("Cheat Code") },
+                                placeholder = { Text("e.g. 12345678 1234") }
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                if (newName.isNotBlank() && newCode.isNotBlank()) {
+                                    val newCheat = Cheat(UUID.randomUUID().toString(), newName, newCode, true)
+                                    val updated = cheatsList + newCheat
+                                    cheatsList = updated
+                                    cheatManager.saveCheats(updated)
+                                    retroView?.let { applyCheats(it) }
+                                    showAddDialog = false
+                                }
+                            }
+                        ) { Text("Add") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
+            if (cheatToEdit != null) {
+                var editName by remember(cheatToEdit) { mutableStateOf(cheatToEdit!!.name) }
+                var editCode by remember(cheatToEdit) { mutableStateOf(cheatToEdit!!.code) }
+                
+                AlertDialog(
+                    onDismissRequest = { cheatToEdit = null },
+                    title = { Text("Edit Cheat") },
+                    text = {
+                        Column {
+                            OutlinedTextField(
+                                value = editName,
+                                onValueChange = { editName = it },
+                                label = { Text("Name") }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = editCode,
+                                onValueChange = { editCode = it },
+                                label = { Text("Cheat Code") },
+                                placeholder = { Text("e.g. 12345678 1234") }
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val current = cheatToEdit
+                                if (current != null && editName.isNotBlank() && editCode.isNotBlank()) {
+                                    val updated = cheatsList.map {
+                                        if (it.id == current.id) it.copy(name = editName, code = editCode) else it
+                                    }
+                                    cheatsList = updated
+                                    cheatManager.saveCheats(updated)
+                                    retroView?.let { applyCheats(it) }
+                                    cheatToEdit = null
+                                }
+                            }
+                        ) { Text("Save") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { cheatToEdit = null }) { Text("Cancel") }
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun getAndroidKeyCode(visualId: Int): Int = when (visualId) {
+    8 -> KeyEvent.KEYCODE_BUTTON_A
+    0 -> KeyEvent.KEYCODE_BUTTON_B
+    2 -> KeyEvent.KEYCODE_BUTTON_SELECT
+    3 -> KeyEvent.KEYCODE_BUTTON_START
+    4 -> KeyEvent.KEYCODE_DPAD_UP
+    5 -> KeyEvent.KEYCODE_DPAD_DOWN
+    6 -> KeyEvent.KEYCODE_DPAD_LEFT
+    7 -> KeyEvent.KEYCODE_DPAD_RIGHT
+    10 -> KeyEvent.KEYCODE_BUTTON_L1
+    11 -> KeyEvent.KEYCODE_BUTTON_R1
+    else -> -1
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/ingame/TouchOverlay.kt
+// ====================================================================
+package com.retrogb.ui.ingame
+
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun TouchOverlay(
+    modifier: Modifier = Modifier,
+    isLandscape: Boolean,
+    retroView: com.swordfish.libretrodroid.GLRetroView,
+    onButtonEvent: (Int, Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current.density
+    val pressedButtons = remember { mutableStateMapOf<Int, Boolean>() }
+    val lastSentStates = remember { mutableStateMapOf<Int, Boolean>() }
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val wPx = constraints.maxWidth.toFloat()
+        val hPx = constraints.maxHeight.toFloat()
+        val wDp = wPx / density
+        val hDp = hPx / density
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInteropFilter { event ->
+                    handleTouch(event, isLandscape, wDp, hDp, density) { id, pressed ->
+                        if (pressed != lastSentStates[id]) {
+                            if (pressed) {
+                                android.view.View(context).performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            }
+                            lastSentStates[id] = pressed
+                            pressedButtons[id] = pressed
+                            onButtonEvent(id, pressed)
+                        }
+                    }
+                    true
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawRetroConsoleControls(this, isLandscape, wDp, hDp, density, pressedButtons)
+            }
+        }
+    }
+}
+
+private fun drawRetroConsoleControls(
+    scope: DrawScope,
+    isLandscape: Boolean,
+    wDp: Float,
+    hDp: Float,
+    density: Float,
+    pressed: Map<Int, Boolean>
+) {
+    with(scope) {
+        // Classic Console Colors
+        val dpadColor = Color(0xFF2A2A2A)
+        val dpadPressed = Color(0xFF111111)
+        val abColor = Color(0xFF333333) // Grey like D-Pad
+        val abPressed = Color(0xFF111111)
+        val pillColor = Color(0xFF5A5C68)
+        val pillPressed = Color(0xFF3A3C48)
+        
+        // Turbo custom colors (Glowing neon green styling)
+        val turboColor = Color(0xFF4CAF50).copy(alpha = 0.6f)
+        val turboPressed = Color(0xFF4CAF50)
+        
+        // Setup Paint for text
+        val textPaint = Paint().apply {
+            color = android.graphics.Color.LTGRAY
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            textSize = 16f * density
+        }
+        val buttonTextPaint = Paint().apply {
+            color = android.graphics.Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            textSize = 20f * density
+        }
+        val pillTextPaint = Paint().apply {
+            color = android.graphics.Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            textSize = 13f * density // Slightly smaller for TURBO
+        }
+
+        fun drawTextCentred(text: String, x: Float, y: Float, paint: Paint) {
+            drawIntoCanvas { canvas ->
+                val textOffset = (paint.descent() + paint.ascent()) / 2
+                canvas.nativeCanvas.drawText(text, x * density, (y * density) - textOffset, paint)
+            }
+        }
+
+        fun drawDPad(cx: Float, cy: Float) {
+            val center = Offset(cx * density, cy * density)
+            val totalSize = 130f * density
+            val armWidth = 44f * density
+            val halfSize = totalSize / 2f
+            val halfArm = armWidth / 2f
+            
+            // Background shadow
+            drawRoundRect(Color.Black.copy(alpha = 0.5f), Offset(center.x - halfArm + 2f*density, center.y - halfSize + 4f*density), Size(armWidth, totalSize), CornerRadius(4f * density))
+            drawRoundRect(Color.Black.copy(alpha = 0.5f), Offset(center.x - halfSize + 2f*density, center.y - halfArm + 4f*density), Size(totalSize, armWidth), CornerRadius(4f * density))
+
+            // Main crosses
+            drawRoundRect(dpadColor, Offset(center.x - halfArm, center.y - halfSize), Size(armWidth, totalSize), CornerRadius(4f * density))
+            drawRoundRect(dpadColor, Offset(center.x - halfSize, center.y - halfArm), Size(totalSize, armWidth), CornerRadius(4f * density))
+            
+            // Pressed states
+            if (pressed[4] == true) drawRoundRect(dpadPressed, Offset(center.x - halfArm, center.y - halfSize), Size(armWidth, halfSize), CornerRadius(4f * density)) // Up
+            if (pressed[5] == true) drawRoundRect(dpadPressed, Offset(center.x - halfArm, center.y), Size(armWidth, halfSize), CornerRadius(4f * density)) // Down
+            if (pressed[6] == true) drawRoundRect(dpadPressed, Offset(center.x - halfSize, center.y - halfArm), Size(halfSize, armWidth), CornerRadius(4f * density)) // Left
+            if (pressed[7] == true) drawRoundRect(dpadPressed, Offset(center.x, center.y - halfArm), Size(halfSize, armWidth), CornerRadius(4f * density)) // Right
+
+            // Center circle decoration
+            drawCircle(Color(0xFF1E1E1E), 12f * density, center)
+        }
+
+        fun drawRoundBtn(id: Int, cx: Float, cy: Float, label: String) {
+            val isPressed = pressed[id] == true
+            val center = Offset(cx * density, cy * density)
+            val rad = 38f * density
+            
+            // Drop shadow
+            drawCircle(Color.Black.copy(alpha = 0.5f), rad, Offset(center.x + 2f*density, center.y + 4f*density))
+            
+            // Button body
+            drawCircle(if (isPressed) abPressed else abColor, rad, center)
+            
+            // Inner ring for 3D effect
+            drawCircle(Color.Black.copy(alpha = 0.2f), rad - 2f*density, center, style = androidx.compose.ui.graphics.drawscope.Stroke(2f*density))
+            
+            // Label INSIDE
+            drawTextCentred(label, cx, cy, buttonTextPaint)
+        }
+
+        fun drawPillBtn(id: Int, cx: Float, cy: Float, w: Float, h: Float, label: String) {
+            val isPressed = pressed[id] == true
+            val width = w * density
+            val height = h * density
+            val topLeft = Offset((cx - w/2) * density, (cy - h/2) * density)
+            val size = Size(width, height)
+            val corner = CornerRadius(height / 2f)
+
+            // Shadow
+            drawRoundRect(Color.Black.copy(alpha = 0.5f), Offset(topLeft.x + 2f*density, topLeft.y + 4f*density), size, corner)
+            
+            // Body
+            drawRoundRect(if (isPressed) pillPressed else pillColor, topLeft, size, corner)
+            
+            // Label INSIDE the button
+            drawTextCentred(label, cx, cy, pillTextPaint)
+        }
+
+        fun drawTurboBtn(cx: Float, cy: Float, w: Float, h: Float, label: String) {
+            val isPressed = pressed[12] == true
+            val width = w * density
+            val height = h * density
+            val topLeft = Offset((cx - w/2) * density, (cy - h/2) * density)
+            val size = Size(width, height)
+            val corner = CornerRadius(height / 2f)
+
+            // Shadow
+            drawRoundRect(Color.Black.copy(alpha = 0.5f), Offset(topLeft.x + 2f*density, topLeft.y + 4f*density), size, corner)
+            
+            // Body
+            drawRoundRect(if (isPressed) turboPressed else turboColor, topLeft, size, corner)
+            
+            // Label INSIDE
+            drawTextCentred(label, cx, cy, pillTextPaint)
+        }
+
+        if (isLandscape) {
+            // Left margin constraints: 0 to 140dp
+            drawDPad(cx = 70f, cy = hDp / 2f + 3f) // Aligned bottom with B
+            drawPillBtn(id = 10, cx = 70f, cy = 80f, w = 90f, h = 35f, label = "L")
+            
+            // Turbo: Positioned below D-pad (between D-pad and Select)
+            drawTurboBtn(cx = 70f, cy = hDp - 75f, w = 90f, h = 30f, label = "TURBO")
+            
+            // Select: Positioned at the very bottom left
+            drawPillBtn(id = 2, cx = 70f, cy = hDp - 35f, w = 80f, h = 25f, label = "SELECT")
+
+            // Right margin constraints: wDp - 140dp to wDp
+            drawRoundBtn(id = 8, cx = wDp - 45f, cy = hDp / 2f - 20f, label = "A")
+            drawRoundBtn(id = 0, cx = wDp - 105f, cy = hDp / 2f + 30f, label = "B")
+            drawPillBtn(id = 11, cx = wDp - 70f, cy = 80f, w = 90f, h = 35f, label = "R")
+            // Start
+            drawPillBtn(id = 3, cx = wDp - 70f, cy = hDp - 40f, w = 80f, h = 25f, label = "START")
+
+        } else {
+            // -- PORTRAIT LAYOUT -- (Touch overlay takes bottom 45% of screen, wDp x hDp)
+            drawDPad(cx = 90f, cy = hDp / 2f - 3f) // Aligned top with A
+            
+            drawRoundBtn(id = 8, cx = wDp - 50f, cy = hDp / 2f - 30f, label = "A")
+            drawRoundBtn(id = 0, cx = wDp - 120f, cy = hDp / 2f + 20f, label = "B")
+            
+            // L & R at the top of the control area with TURBO shifted higher
+            drawTurboBtn(cx = 60f, cy = 10f, w = 80f, h = 25f, label = "TURBO")
+            drawPillBtn(id = 10, cx = 60f, cy = 75f, w = 80f, h = 30f, label = "L")
+            drawPillBtn(id = 11, cx = wDp - 60f, cy = 75f, w = 80f, h = 30f, label = "R")
+            
+            // Select & Start at bottom center
+            drawPillBtn(id = 2, cx = wDp / 2f - 60f, cy = hDp - 40f, w = 80f, h = 25f, label = "SELECT")
+            drawPillBtn(id = 3, cx = wDp / 2f + 60f, cy = hDp - 40f, w = 80f, h = 25f, label = "START")
+        }
+    }
+}
+
+private fun handleTouch(
+    event: android.view.MotionEvent,
+    isLandscape: Boolean,
+    wDp: Float,
+    hDp: Float,
+    density: Float,
+    onEvent: (Int, Boolean) -> Unit
+) {
+    val action = event.actionMasked
+    val pointerCount = event.pointerCount
+
+    val activeButtons = mutableSetOf<Int>()
+    for (i in 0 until pointerCount) {
+        val x = event.getX(i) / density
+        val y = event.getY(i) / density
+
+        val id = if (isLandscape) {
+            getLandscapeButtonAt(x, y, wDp, hDp)
+        } else {
+            getPortraitButtonAt(x, y, wDp, hDp)
+        }
+        if (id != -1) activeButtons.add(id)
+    }
+
+    if (action == android.view.MotionEvent.ACTION_UP || action == android.view.MotionEvent.ACTION_CANCEL) {
+        activeButtons.clear()
+    }
+
+    val allIds = listOf(0, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12)
+    for (id in allIds) {
+        val isPressed = activeButtons.contains(id)
+        onEvent(id, isPressed)
+    }
+}
+
+private fun getLandscapeButtonAt(x: Float, y: Float, wDp: Float, hDp: Float): Int {
+    // D-PAD: cx = 70f, cy = hDp / 2f + 3f
+    val dpadCx = 70f
+    val dpadCy = hDp / 2f + 3f
+    if (dist(x, y, dpadCx, dpadCy) < 80f) {
+        val dx = x - dpadCx
+        val dy = y - dpadCy
+        return if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 0) 7 else 6
+        } else {
+            if (dy > 0) 5 else 4
+        }
+    }
+    
+    // A: cx = wDp - 45f, cy = hDp / 2f - 20f
+    if (dist(x, y, wDp - 45f, hDp / 2f - 20f) < 55f) return 8
+    // B: cx = wDp - 105f, cy = hDp / 2f + 30f
+    if (dist(x, y, wDp - 105f, hDp / 2f + 30f) < 55f) return 0
+    
+    // L: cx = 70f, cy = 80f
+    if (x < 120f && y in 50f..110f) return 10
+    // R: cx = wDp - 70f, cy = 80f
+    if (x > wDp - 120f && y in 50f..110f) return 11
+    
+    // Turbo: cx = 70f, cy = hDp - 75f
+    if (x < 120f && y in (hDp - 95f)..(hDp - 55f)) return 12
+    // Select: cx = 70f, cy = hDp - 35f
+    if (x < 120f && y > hDp - 55f) return 2
+    
+    // Start: cx = wDp - 70f, cy = hDp - 40f
+    if (x > wDp - 120f && y > hDp - 70f) return 3
+    
+    return -1
+}
+
+private fun getPortraitButtonAt(x: Float, y: Float, wDp: Float, hDp: Float): Int {
+    // D-PAD: cx = 90f, cy = hDp / 2f - 3f
+    val dpadCx = 90f
+    val dpadCy = hDp / 2f - 3f
+    if (dist(x, y, dpadCx, dpadCy) < 80f) {
+        val dx = x - dpadCx
+        val dy = y - dpadCy
+        return if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 0) 7 else 6
+        } else {
+            if (dy > 0) 5 else 4
+        }
+    }
+    
+    // A: cx = wDp - 50f, cy = hDp / 2f - 30f
+    if (dist(x, y, wDp - 50f, hDp / 2f - 30f) < 55f) return 8
+    // B: cx = wDp - 120f, cy = hDp / 2f + 20f
+    if (dist(x, y, wDp - 120f, hDp / 2f + 20f) < 55f) return 0
+    
+    // Turbo: cx = 60f, cy = 10f
+    if (x < 110f && y < 35f) return 12
+    // L: cx = 60f, cy = 75f
+    if (x < 110f && y in 35f..105f) return 10
+    // R: cx = wDp - 60f, cy = 75f
+    if (x > wDp - 110f && y < 105f) return 11
+    
+    // Select: cx = wDp / 2f - 60f, cy = hDp - 40f
+    if (dist(x, y, wDp / 2f - 60f, hDp - 40f) < 50f) return 2
+    // Start: cx = wDp / 2f + 60f, cy = hDp - 40f
+    if (dist(x, y, wDp / 2f + 60f, hDp - 40f) < 50f) return 3
+    
+    return -1
+}
+
+private fun dist(x1: Float, y1: Float, x2: Float, y2: Float): Float {
+    val dx = x1 - x2
+    val dy = y1 - y2
+    return Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/main/MainScreen.kt
+// ====================================================================
+package com.retrogb.ui.main
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+@Composable
+fun MainScreen(
+    onLoadRom: () -> Unit,
+    onContinueGame: () -> Unit,
+    onSettings: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+    ) {
+        // Subtle Source Code button (GPL compliance)
+        TextButton(
+            onClick = {
+                try {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://github.com/flyingllamay/Retro_GB")
+                    )
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 16.dp, end = 16.dp)
+        ) {
+            Text(
+                text = "Source Code",
+                color = Color.White.copy(alpha = 0.25f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 90.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(bottom = 56.dp)
+            ) {
+                // Premium Logo Mark
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(Color(0xFF2B2B2B), Color(0xFF1A1A1A))
+                            ),
+                            shape = RoundedCornerShape(20.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Inner accent
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(
+                                brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                    colors = listOf(Color(0xFF00FF87), Color(0xFF00B8D4))
+                                ),
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            )
+                    )
+                    // Inner dark cutout
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .background(Color(0xFF1A1A1A), androidx.compose.foundation.shape.CircleShape)
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Typography
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "RETRO",
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 2.sp,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "GB",
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.Black,
+                        style = androidx.compose.ui.text.TextStyle(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(Color(0xFF00FF87), Color(0xFF00B8D4))
+                            )
+                        )
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(6.dp))
+                
+                Text(
+                    text = "E M U L A T O R",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 8.sp,
+                    color = Color(0xFF888888)
+                )
+            }
+
+            MenuButton(
+                text = "LOAD ROM",
+                icon = Icons.Default.Search,
+                color = Color(0xFF2196F3),
+                onClick = onLoadRom
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            MenuButton(
+                text = "CONTINUE GAME",
+                icon = Icons.Default.PlayArrow,
+                color = Color(0xFF4CAF50),
+                onClick = onContinueGame
+            )
+        }
+        
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "v1.0.0",
+                color = Color.Gray,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            com.retrogb.monetization.AdBanner()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MenuButton(
+    text: String,
+    icon: ImageVector,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(70.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = color),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = text,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/onboarding/OnboardingScreen.kt
+// ====================================================================
+package com.retrogb.ui.onboarding
+
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+
+@Composable
+fun OnboardingScreen(
+    onFolderSelected: (Uri) -> Unit
+) {
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            onFolderSelected(uri)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Welcome to RetroGB",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+        Text(
+            text = "To get started, please select the folder on your device where your Game Boy, Game Boy Color, and Game Boy Advance ROMs are stored.",
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(bottom = 32.dp)
+        )
+        Button(
+            onClick = { launcher.launch(null) },
+            modifier = Modifier.fillMaxWidth(0.8f)
+        ) {
+            Text("Select ROM Folder")
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/java/com/retrogb/ui/settings/SettingsScreen.kt
+// ====================================================================
+package com.retrogb.ui.settings
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+
+import com.retrogb.data.settings.SettingsManager
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    onBack: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsManager = remember { SettingsManager(context) }
+    
+    var volume by remember { mutableStateOf(settingsManager.audioVolume) }
+    var useLcdFilter by remember { mutableStateOf(settingsManager.originalScreenEnabled) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings") },
+                navigationIcon = {
+                    Button(onClick = onBack) { Text("Back") }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+        ) {
+            Text(text = "Audio Volume", style = MaterialTheme.typography.titleMedium)
+            Slider(
+                value = volume,
+                onValueChange = { 
+                    volume = it
+                    settingsManager.audioVolume = it
+                },
+                valueRange = 0f..1f,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = "Enable Original Screen Filter", modifier = Modifier.weight(1f))
+                Switch(checked = useLcdFilter, onCheckedChange = { 
+                    useLcdFilter = it
+                    settingsManager.originalScreenEnabled = it
+                })
+            }
+        }
+    }
+}
+
+
+========================================================================
+
+// FILE: app/src/main/res/values/strings.xml
+// ====================================================================
+<resources>
+    <string name="app_name">RetroGB</string>
+</resources>
+
+
+========================================================================
+
+// FILE: app/src/main/res/values/themes.xml
+// ====================================================================
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.RetroGB" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
+
+
+========================================================================
+
+// FILE: app/src/main/res/xml/backup_rules.xml
+// ====================================================================
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="file" path="."/>
+    <exclude domain="file" path="cache/"/>
+</full-backup-content>
+
+
+========================================================================
+
+// FILE: app/src/main/res/xml/data_extraction_rules.xml
+// ====================================================================
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="."/>
+        <exclude domain="file" path="cache/"/>
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="."/>
+        <exclude domain="file" path="cache/"/>
+    </device-transfer>
+</data-extraction-rules>
+
+
+========================================================================
+
